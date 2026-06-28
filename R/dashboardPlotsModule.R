@@ -2,6 +2,37 @@ dashboardPlotsUI <- function(id) {
   ns <- shiny::NS(id)
 
   htmltools::tagList(
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    bslib::card(
+      bslib::card_header("Filters"),
+      bslib::layout_column_wrap(
+        width = 1/3,
+        fill  = FALSE,
+        shiny::dateRangeInput(
+          ns("date_range"),
+          "Date Range",
+          start = NULL,   # populated by server via updateDateRangeInput
+          end   = NULL
+        ),
+        shiny::selectInput(
+          ns("industry"),
+          "Industry",
+          choices  = NULL,  # populated by server
+          multiple = TRUE,
+          selected = NULL
+        ),
+        shiny::selectInput(
+          ns("product"),
+          "Product",
+          choices  = NULL,  # populated by server
+          multiple = TRUE,
+          selected = NULL
+        )
+      )
+    ),
+
+    # ── Plots ─────────────────────────────────────────────────────────────────
     bslib::layout_column_wrap(
       width         = 1/2,
       fill          = FALSE,
@@ -29,6 +60,7 @@ dashboardPlotsUI <- function(id) {
       )
     ),
 
+    # ── Recent Sales ──────────────────────────────────────────────────────────
     bslib::card(
       bslib::card_header("Recent Sales"),
       reactable::reactableOutput(ns("recent_sales_table"))
@@ -39,8 +71,38 @@ dashboardPlotsUI <- function(id) {
 dashboardPlotsServer <- function(id, sales_full, rt_theme) {
   shiny::moduleServer(id, function(input, output, session) {
 
+    # Populate filter controls from the data
+    shiny::observe({
+      shiny::updateDateRangeInput(
+        session, "date_range",
+        start = min(sales_full$sale_date),
+        end   = max(sales_full$sale_date)
+      )
+      shiny::updateSelectInput(session, "industry",
+        choices  = sort(unique(sales_full$industry)),
+        selected = sort(unique(sales_full$industry))
+      )
+      shiny::updateSelectInput(session, "product",
+        choices  = sort(unique(sales_full$product)),
+        selected = sort(unique(sales_full$product))
+      )
+    })
+
+    # Filtered dataset used by all plots
+    filtered <- shiny::reactive({
+      shiny::req(input$date_range, input$industry, input$product)
+      sales_full[
+        sales_full$sale_date >= input$date_range[1] &
+        sales_full$sale_date <= input$date_range[2] &
+        sales_full$industry  %in% input$industry    &
+        sales_full$product   %in% input$product,
+      ]
+    })
+
+    # ── Plots ─────────────────────────────────────────────────────────────────
+
     output$plot_industry <- shiny::renderPlot({
-      d <- aggregate(revenue ~ industry, data = sales_full, FUN = sum)
+      d <- aggregate(revenue ~ industry, data = filtered(), FUN = sum)
       d <- d[order(d$revenue), ]
       d$industry <- factor(d$industry, levels = d$industry)
 
@@ -52,7 +114,7 @@ dashboardPlotsServer <- function(id, sales_full, rt_theme) {
     })
 
     output$plot_trend <- shiny::renderPlot({
-      d <- aggregate(revenue ~ month, data = sales_full, FUN = sum)
+      d <- aggregate(revenue ~ month, data = filtered(), FUN = sum)
 
       ggplot2::ggplot(d, ggplot2::aes(x = month, y = revenue)) +
         ggplot2::geom_line() +
@@ -64,8 +126,8 @@ dashboardPlotsServer <- function(id, sales_full, rt_theme) {
     })
 
     output$plot_top_customers <- shiny::renderPlot({
-      d <- aggregate(revenue ~ company, data = sales_full, FUN = sum)
-      d <- d[order(d$revenue, decreasing = TRUE), ][seq_len(10), ]
+      d <- aggregate(revenue ~ company, data = filtered(), FUN = sum)
+      d <- d[order(d$revenue, decreasing = TRUE), ][seq_len(min(10, nrow(d))), ]
       d <- d[order(d$revenue), ]
       d$company <- factor(d$company, levels = d$company)
 
@@ -77,7 +139,7 @@ dashboardPlotsServer <- function(id, sales_full, rt_theme) {
     })
 
     output$plot_products <- shiny::renderPlot({
-      d <- aggregate(revenue ~ product, data = sales_full, FUN = sum)
+      d <- aggregate(revenue ~ product, data = filtered(), FUN = sum)
       d <- d[order(d$revenue), ]
       d$product <- factor(d$product, levels = d$product)
 
@@ -89,7 +151,8 @@ dashboardPlotsServer <- function(id, sales_full, rt_theme) {
     })
 
     output$recent_sales_table <- reactable::renderReactable({
-      d <- sales_full[order(sales_full$sale_date, decreasing = TRUE), ][seq_len(5), ]
+      d <- filtered()
+      d <- d[order(d$sale_date, decreasing = TRUE), ][seq_len(min(5, nrow(d))), ]
 
       reactable::reactable(
         d[, c("sale_date", "company", "product", "quantity", "price", "revenue")],
